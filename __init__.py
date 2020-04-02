@@ -304,6 +304,9 @@ class Module(ModuleBase):
             self._git_push()
 
     def _add_otp(self, name=None, otp_type=None, secret=None):
+        if not hasattr(pyotp, "parse_uri"):
+            self.q.put([Action.critical_error, _("pyotp lib doesn't support this yet")])
+            return
         if not name:
             self.q.put([Action.ask_input, _("What password should OTP be added to?"), "", "add_otp"])
         elif not otp_type:
@@ -444,24 +447,31 @@ class Module(ModuleBase):
 
             self.q.put([Action.set_selection, []])
 
+    def _parse_otp(self, line):
+        if not hasattr(pyotp, "parse_uri"):
+            return
+
+        try:
+            otp = pyotp.parse_uri(line)
+        except ValueError:
+            return
+
+        if isinstance(otp, pyotp.TOTP):
+            otp_code = otp.now()
+        else:
+            otp_code = otp.generate_otp()
+
+        return ("{} - {}".format(otp.issuer, otp.name) if otp.issuer else otp.name, otp_code)
+
     def _display_results(self, results):
         while self.result_display_active:
             result_lines = results.rstrip().splitlines()
             self.passwordEntries = {}
             # Parse OTP
             for number, line in enumerate(result_lines):
-                try:
-                    otp = pyotp.parse_uri(line)
-                except ValueError:
-                    continue
-
-                if isinstance(otp, pyotp.TOTP):
-                    otp_code = otp.now()
-                else:
-                    otp_code = otp.generate_otp()
-
-                otp_description = "{} - {}".format(otp.issuer, otp.name) if otp.issuer else otp.name
-                result_lines[number] = "OTP ({}): {}".format(otp_description, otp_code)
+                otp_data = self._parse_otp(line)
+                if otp_data:
+                    result_lines[number] = "OTP ({}): {}".format(*otp_data)
 
             # If only a password and no other fields, select password immediately
             if len(result_lines) == 1:
